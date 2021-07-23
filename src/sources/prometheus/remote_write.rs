@@ -1,13 +1,13 @@
 use super::parser;
 use crate::{
     config::{self, GenerateConfig, SourceConfig, SourceContext, SourceDescription},
+    event::Event,
     internal_events::{PrometheusRemoteWriteParseError, PrometheusRemoteWriteReceived},
     sources::{
         self,
         util::{decode, ErrorMessage, HttpSource, HttpSourceAuthConfig},
     },
     tls::TlsConfig,
-    Event,
 };
 use bytes::Bytes;
 use prometheus_parser::proto;
@@ -47,15 +47,7 @@ impl GenerateConfig for PrometheusRemoteWriteConfig {
 impl SourceConfig for PrometheusRemoteWriteConfig {
     async fn build(&self, cx: SourceContext) -> crate::Result<sources::Source> {
         let source = RemoteWriteSource;
-        source.run(
-            self.address,
-            "",
-            true,
-            &self.tls,
-            &self.auth,
-            cx.out,
-            cx.shutdown,
-        )
+        source.run(self.address, "", true, &self.tls, &self.auth, cx)
     }
 
     fn output_type(&self) -> crate::config::DataType {
@@ -91,7 +83,7 @@ impl RemoteWriteSource {
 }
 
 impl HttpSource for RemoteWriteSource {
-    fn build_event(
+    fn build_events(
         &self,
         mut body: Bytes,
         header_map: HeaderMap,
@@ -107,10 +99,10 @@ impl HttpSource for RemoteWriteSource {
         {
             body = decode(&Some("snappy".to_string()), body)?;
         }
-        let result = self.decode_body(body)?;
-        let count = result.len();
+        let events = self.decode_body(body)?;
+        let count = events.len();
         emit!(PrometheusRemoteWriteReceived { count });
-        Ok(result)
+        Ok(events)
     }
 }
 
@@ -119,12 +111,12 @@ mod test {
     use super::*;
     use crate::{
         config::{SinkConfig, SinkContext},
-        event::{Metric, MetricKind, MetricValue},
         sinks::prometheus::remote_write::RemoteWriteConfig,
         test_util, Pipeline,
     };
     use chrono::{SubsecRound as _, Utc};
     use futures::stream;
+    use vector_core::event::{EventStatus, Metric, MetricKind, MetricValue};
 
     #[test]
     fn genreate_config() {
@@ -143,7 +135,7 @@ mod test {
 
     async fn receives_metrics(tls: Option<TlsConfig>) {
         let address = test_util::next_addr();
-        let (tx, rx) = Pipeline::new_test();
+        let (tx, rx) = Pipeline::new_test_finalize(EventStatus::Delivered);
 
         let proto = if tls.is_none() { "http" } else { "https" };
         let source = PrometheusRemoteWriteConfig {
@@ -165,9 +157,16 @@ mod test {
             .expect("Error building config.");
 
         let events = make_events();
-        sink.run(stream::iter(events.clone())).await.unwrap();
+        let events_copy = events.clone();
+        let mut output = test_util::spawn_collect_ready(
+            async move {
+                sink.run(stream::iter(events_copy)).await.unwrap();
+            },
+            rx,
+            1,
+        )
+        .await;
 
-        let mut output = test_util::collect_ready(rx).await;
         // The MetricBuffer used by the sink may reorder the metrics, so
         // put them back into order before comparing.
         output.sort_unstable_by_key(|event| event.as_metric().name().to_owned());
@@ -196,7 +195,7 @@ mod test {
                 "histogram_3",
                 MetricKind::Absolute,
                 MetricValue::AggregatedHistogram {
-                    buckets: crate::buckets![ 2.3 => 11, 4.2 => 85 ],
+                    buckets: vector_core::buckets![ 2.3 => 11, 4.2 => 85 ],
                     count: 96,
                     sum: 156.2,
                 },
@@ -207,7 +206,7 @@ mod test {
                 "summary_4",
                 MetricKind::Absolute,
                 MetricValue::AggregatedSummary {
-                    quantiles: crate::quantiles![ 0.1 => 1.2, 0.5 => 3.6, 0.9 => 5.2 ],
+                    quantiles: vector_core::quantiles![ 0.1 => 1.2, 0.5 => 3.6, 0.9 => 5.2 ],
                     count: 23,
                     sum: 8.6,
                 },

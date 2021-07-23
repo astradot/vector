@@ -2,9 +2,7 @@ pub mod prelude;
 mod runtime;
 
 pub use compiler::{
-    function,
-    path::{self, Path},
-    state, value, Context, Expression, Function, Program, Target, Value,
+    function, state, type_def::Index, value, Context, Expression, Function, Program, Target, Value,
 };
 pub use diagnostic;
 pub use runtime::{Runtime, RuntimeResult, Terminate};

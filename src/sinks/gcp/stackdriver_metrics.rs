@@ -1,16 +1,14 @@
 use crate::config::{DataType, SinkConfig, SinkContext, SinkDescription};
-use crate::event::{Metric, MetricValue};
+use crate::event::{Event, Metric, MetricValue};
 use crate::http::HttpClient;
 use crate::sinks::gcp;
 use crate::sinks::util::buffer::metrics::MetricsBuffer;
 use crate::sinks::util::http::{BatchedHttpSink, HttpSink};
-use crate::sinks::util::{BatchConfig, BatchSettings, TowerRequestConfig};
+use crate::sinks::util::{BatchConfig, BatchSettings, EncodedEvent, TowerRequestConfig};
 use crate::sinks::{Healthcheck, VectorSink};
 use crate::tls::{TlsOptions, TlsSettings};
-use crate::Event;
 use chrono::{DateTime, Utc};
-use futures::sink::SinkExt;
-use futures::FutureExt;
+use futures::{sink::SinkExt, FutureExt};
 use http::header::AUTHORIZATION;
 use http::{HeaderValue, Uri};
 use lazy_static::lazy_static;
@@ -103,20 +101,21 @@ struct HttpEventSink {
 
 #[async_trait::async_trait]
 impl HttpSink for HttpEventSink {
-    type Input = Event;
+    type Input = Metric;
     type Output = Vec<Metric>;
 
-    fn encode_event(&self, event: Event) -> Option<Self::Input> {
+    fn encode_event(&self, event: Event) -> Option<EncodedEvent<Self::Input>> {
         let metric = event.into_metric();
 
-        match &metric.data.value {
-            &MetricValue::Counter { .. } => Some(Event::Metric(metric)),
-            &MetricValue::Gauge { .. } => Some(Event::Metric(metric)),
+        match metric.value() {
+            &MetricValue::Counter { .. } => Some(metric),
+            &MetricValue::Gauge { .. } => Some(metric),
             not_supported => {
                 warn!("Unsupported metric type: {:?}.", not_supported);
                 None
             }
         }
+        .map(EncodedEvent::new)
     }
 
     async fn build_request(
@@ -124,31 +123,26 @@ impl HttpSink for HttpEventSink {
         mut metrics: Self::Output,
     ) -> crate::Result<hyper::Request<Vec<u8>>> {
         let metric = metrics.pop().expect("only one metric");
-        let namespace = metric
-            .namespace()
-            .unwrap_or_else(|| self.config.default_namespace.as_ref());
+        let (series, data, _metadata) = metric.into_parts();
+        let namespace = series
+            .name
+            .namespace
+            .unwrap_or_else(|| self.config.default_namespace.clone());
         let metric_type = format!(
             "custom.googleapis.com/{}/metrics/{}",
-            namespace,
-            metric.name()
+            namespace, series.name.name
         );
 
-        let metric_labels = metric
-            .series
-            .tags
-            .unwrap_or_default()
-            .into_iter()
-            .collect::<std::collections::HashMap<_, _>>();
-        let end_time = metric.data.timestamp.unwrap_or_else(chrono::Utc::now);
+        let end_time = data.timestamp.unwrap_or_else(chrono::Utc::now);
 
-        let (point_value, interval, metric_kind) = match metric.data.value {
+        let (point_value, interval, metric_kind) = match &data.value {
             MetricValue::Counter { value } => {
                 let interval = gcp::GcpInterval {
                     start_time: Some(self.started),
                     end_time,
                 };
 
-                (value, interval, gcp::GcpMetricKind::Cumulative)
+                (*value, interval, gcp::GcpMetricKind::Cumulative)
             }
             MetricValue::Gauge { value } => {
                 let interval = gcp::GcpInterval {
@@ -156,10 +150,16 @@ impl HttpSink for HttpEventSink {
                     end_time,
                 };
 
-                (value, interval, gcp::GcpMetricKind::Gauge)
+                (*value, interval, gcp::GcpMetricKind::Gauge)
             }
             _ => unreachable!(),
         };
+
+        let metric_labels = series
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
 
         let series = gcp::GcpSeries {
             time_series: &[gcp::GcpSerie {

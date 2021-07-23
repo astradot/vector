@@ -5,8 +5,8 @@ use indoc::indoc;
 use serde_json::Value;
 use std::{collections::HashMap, fs, io::Read, path::Path, pin::Pin};
 use vector::{
+    event::Event,
     transforms::{wasm::Wasm, TaskTransform, Transform},
-    Event,
 };
 
 fn parse_event_artifact(path: impl AsRef<Path>) -> vector::Result<Event> {
@@ -83,6 +83,7 @@ pub fn add_fields(criterion: &mut Criterion) {
                         .test_key2 = "test_value2"
                     "#}
                     .to_string(),
+                    timezone: shared::TimeZone::default(),
                     drop_on_error: true,
                     drop_on_abort: true,
                 })

@@ -52,6 +52,7 @@ impl Reader {
     }
 }
 
+#[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use super::*;

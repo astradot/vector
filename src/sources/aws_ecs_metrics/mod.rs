@@ -1,11 +1,12 @@
 use crate::{
     config::{self, GenerateConfig, SourceConfig, SourceContext, SourceDescription},
+    event::Event,
     internal_events::{
         AwsEcsMetricsErrorResponse, AwsEcsMetricsHttpError, AwsEcsMetricsParseError,
         AwsEcsMetricsReceived, AwsEcsMetricsRequestCompleted,
     },
     shutdown::ShutdownSignal,
-    Event, Pipeline,
+    Pipeline,
 };
 use futures::{stream, SinkExt, StreamExt};
 use hyper::{Body, Client, Request};
@@ -532,7 +533,7 @@ mod test {
             .find(|m| m.name() == "network_receive_bytes_total")
         {
             Some(m) => {
-                assert_eq!(m.data.value, MetricValue::Counter { value: 329932716.0 });
+                assert_eq!(m.value(), &MetricValue::Counter { value: 329932716.0 });
                 assert_eq!(m.namespace(), Some("awsecs"));
 
                 match m.tags() {

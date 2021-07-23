@@ -1,5 +1,5 @@
 use crate::{
-    event::metric::{Metric, MetricValue, StatisticKind},
+    event::metric::{Metric, MetricKind, MetricValue, StatisticKind},
     sinks::util::{encode_namespace, statistic::DistributionStatistic},
 };
 use chrono::Utc;
@@ -37,23 +37,23 @@ pub(super) trait MetricCollector {
     ) {
         let name = encode_namespace(metric.namespace().or(default_namespace), '_', metric.name());
         let name = &name;
-        let timestamp = metric.data.timestamp.map(|t| t.timestamp_millis());
+        let timestamp = metric.timestamp().map(|t| t.timestamp_millis());
 
-        if metric.data.kind.is_absolute() {
+        if metric.kind() == MetricKind::Absolute {
             let tags = metric.tags();
-            self.emit_metadata(metric.name(), &name, &metric.data.value);
+            self.emit_metadata(metric.name(), name, metric.value());
 
-            match &metric.data.value {
+            match metric.value() {
                 MetricValue::Counter { value } => {
-                    self.emit_value(timestamp, &name, "", *value, tags, None);
+                    self.emit_value(timestamp, name, "", *value, tags, None);
                 }
                 MetricValue::Gauge { value } => {
-                    self.emit_value(timestamp, &name, "", *value, tags, None);
+                    self.emit_value(timestamp, name, "", *value, tags, None);
                 }
                 MetricValue::Set { values } => {
                     // sets could expire
                     let value = if expired { 0 } else { values.len() };
-                    self.emit_value(timestamp, &name, "", value as f64, tags, None);
+                    self.emit_value(timestamp, name, "", value as f64, tags, None);
                 }
                 MetricValue::Distribution {
                     samples,
@@ -79,7 +79,7 @@ pub(super) trait MetricCollector {
                     for (b, c) in buckets.iter().zip(counts.iter()) {
                         self.emit_value(
                             timestamp,
-                            &name,
+                            name,
                             "_bucket",
                             *c as f64,
                             tags,
@@ -88,14 +88,14 @@ pub(super) trait MetricCollector {
                     }
                     self.emit_value(
                         timestamp,
-                        &name,
+                        name,
                         "_bucket",
                         count as f64,
                         tags,
                         Some(("le", "+Inf".to_string())),
                     );
-                    self.emit_value(timestamp, &name, "_sum", sum as f64, tags, None);
-                    self.emit_value(timestamp, &name, "_count", count as f64, tags, None);
+                    self.emit_value(timestamp, name, "_sum", sum as f64, tags, None);
+                    self.emit_value(timestamp, name, "_count", count as f64, tags, None);
                 }
                 MetricValue::Distribution {
                     samples,
@@ -106,28 +106,28 @@ pub(super) trait MetricCollector {
                         for (q, v) in statistic.quantiles.iter() {
                             self.emit_value(
                                 timestamp,
-                                &name,
+                                name,
                                 "",
                                 *v,
                                 tags,
                                 Some(("quantile", q.to_string())),
                             );
                         }
-                        self.emit_value(timestamp, &name, "_sum", statistic.sum, tags, None);
+                        self.emit_value(timestamp, name, "_sum", statistic.sum, tags, None);
                         self.emit_value(
                             timestamp,
-                            &name,
+                            name,
                             "_count",
                             statistic.count as f64,
                             tags,
                             None,
                         );
-                        self.emit_value(timestamp, &name, "_min", statistic.min, tags, None);
-                        self.emit_value(timestamp, &name, "_max", statistic.max, tags, None);
-                        self.emit_value(timestamp, &name, "_avg", statistic.avg, tags, None);
+                        self.emit_value(timestamp, name, "_min", statistic.min, tags, None);
+                        self.emit_value(timestamp, name, "_max", statistic.max, tags, None);
+                        self.emit_value(timestamp, name, "_avg", statistic.avg, tags, None);
                     } else {
-                        self.emit_value(timestamp, &name, "_sum", 0.0, tags, None);
-                        self.emit_value(timestamp, &name, "_count", 0.0, tags, None);
+                        self.emit_value(timestamp, name, "_sum", 0.0, tags, None);
+                        self.emit_value(timestamp, name, "_count", 0.0, tags, None);
                     }
                 }
                 MetricValue::AggregatedHistogram {
@@ -142,7 +142,7 @@ pub(super) trait MetricCollector {
                         value += bucket.count as f64;
                         self.emit_value(
                             timestamp,
-                            &name,
+                            name,
                             "_bucket",
                             value,
                             tags,
@@ -151,14 +151,14 @@ pub(super) trait MetricCollector {
                     }
                     self.emit_value(
                         timestamp,
-                        &name,
+                        name,
                         "_bucket",
                         *count as f64,
                         tags,
                         Some(("le", "+Inf".to_string())),
                     );
-                    self.emit_value(timestamp, &name, "_sum", *sum, tags, None);
-                    self.emit_value(timestamp, &name, "_count", *count as f64, tags, None);
+                    self.emit_value(timestamp, name, "_sum", *sum, tags, None);
+                    self.emit_value(timestamp, name, "_count", *count as f64, tags, None);
                 }
                 MetricValue::AggregatedSummary {
                     quantiles,
@@ -168,15 +168,15 @@ pub(super) trait MetricCollector {
                     for quantile in quantiles {
                         self.emit_value(
                             timestamp,
-                            &name,
+                            name,
                             "",
                             quantile.value,
                             tags,
                             Some(("quantile", quantile.upper_limit.to_string())),
                         );
                     }
-                    self.emit_value(timestamp, &name, "_sum", *sum, tags, None);
-                    self.emit_value(timestamp, &name, "_count", *count as f64, tags, None);
+                    self.emit_value(timestamp, name, "_sum", *sum, tags, None);
+                    self.emit_value(timestamp, name, "_count", *count as f64, tags, None);
                 }
             }
         }
@@ -258,7 +258,7 @@ impl StringCollector {
     }
 
     fn encode_header(name: &str, fullname: &str, value: &MetricValue) -> String {
-        let r#type = value.prometheus_metric_type().as_str();
+        let r#type = prometheus_metric_type(value).as_str();
         format!(
             "# HELP {} {}\n# TYPE {} {}\n",
             fullname, name, fullname, r#type
@@ -321,7 +321,7 @@ impl MetricCollector for TimeSeries {
 
     fn emit_metadata(&mut self, name: &str, fullname: &str, value: &MetricValue) {
         if !self.metadata.contains_key(name) {
-            let r#type = value.prometheus_metric_type();
+            let r#type = prometheus_metric_type(value);
             let metadata = proto::MetricMetadata {
                 r#type: r#type as i32,
                 metric_family_name: fullname.into(),
@@ -366,23 +366,21 @@ impl MetricCollector for TimeSeries {
     }
 }
 
-impl MetricValue {
-    fn prometheus_metric_type(&self) -> proto::MetricType {
-        use proto::MetricType;
-        match self {
-            MetricValue::Counter { .. } => MetricType::Counter,
-            MetricValue::Gauge { .. } | MetricValue::Set { .. } => MetricType::Gauge,
-            MetricValue::Distribution {
-                statistic: StatisticKind::Histogram,
-                ..
-            } => MetricType::Histogram,
-            MetricValue::Distribution {
-                statistic: StatisticKind::Summary,
-                ..
-            } => MetricType::Summary,
-            MetricValue::AggregatedHistogram { .. } => MetricType::Histogram,
-            MetricValue::AggregatedSummary { .. } => MetricType::Summary,
-        }
+fn prometheus_metric_type(metric_value: &MetricValue) -> proto::MetricType {
+    use proto::MetricType;
+    match metric_value {
+        MetricValue::Counter { .. } => MetricType::Counter,
+        MetricValue::Gauge { .. } | MetricValue::Set { .. } => MetricType::Gauge,
+        MetricValue::Distribution {
+            statistic: StatisticKind::Histogram,
+            ..
+        } => MetricType::Histogram,
+        MetricValue::Distribution {
+            statistic: StatisticKind::Summary,
+            ..
+        } => MetricType::Summary,
+        MetricValue::AggregatedHistogram { .. } => MetricType::Histogram,
+        MetricValue::AggregatedSummary { .. } => MetricType::Summary,
     }
 }
 
@@ -618,7 +616,7 @@ mod tests {
             "requests".to_owned(),
             MetricKind::Absolute,
             MetricValue::Distribution {
-                samples: crate::samples![1.0 => 3, 2.0 => 3, 3.0 => 2],
+                samples: vector_core::samples![1.0 => 3, 2.0 => 3, 3.0 => 2],
                 statistic: StatisticKind::Histogram,
             },
         )
@@ -665,7 +663,7 @@ mod tests {
             "requests".to_owned(),
             MetricKind::Absolute,
             MetricValue::AggregatedHistogram {
-                buckets: crate::buckets![1.0 => 1, 2.1 => 2, 3.0 => 3],
+                buckets: vector_core::buckets![1.0 => 1, 2.1 => 2, 3.0 => 3],
                 count: 6,
                 sum: 12.5,
             },
@@ -710,7 +708,7 @@ mod tests {
             "requests".to_owned(),
             MetricKind::Absolute,
             MetricValue::AggregatedSummary {
-                quantiles: crate::quantiles![0.01 => 1.5, 0.5 => 2.0, 0.99 => 3.0],
+                quantiles: vector_core::quantiles![0.01 => 1.5, 0.5 => 2.0, 0.99 => 3.0],
                 count: 6,
                 sum: 12.0,
             },
@@ -767,7 +765,7 @@ mod tests {
             "requests".to_owned(),
             MetricKind::Absolute,
             MetricValue::Distribution {
-                samples: crate::samples![1.0 => 3, 2.0 => 3, 3.0 => 2],
+                samples: vector_core::samples![1.0 => 3, 2.0 => 3, 3.0 => 2],
                 statistic: StatisticKind::Summary,
             },
         )

@@ -7,9 +7,10 @@ use crate::{
     sinks::{
         self,
         util::{
+            batch::{BatchConfig, BatchSettings},
             buffer::metrics::{MetricNormalize, MetricNormalizer, MetricSet, MetricsBuffer},
             http::HttpRetryLogic,
-            BatchConfig, BatchSettings, PartitionBatchSink, PartitionBuffer, PartitionInnerBuffer,
+            EncodedEvent, PartitionBatchSink, PartitionBuffer, PartitionInnerBuffer,
             TowerRequestConfig,
         },
     },
@@ -119,7 +120,7 @@ impl SinkConfig for RemoteWriteConfig {
                                 .ok()
                         });
                         let key = PartitionKey { tenant_id };
-                        Ok(PartitionInnerBuffer::new(event, key))
+                        Ok(EncodedEvent::new(PartitionInnerBuffer::new(event, key)))
                     }))
                 })
                 .sink_map_err(
@@ -444,9 +445,9 @@ mod integration_tests {
     use crate::{
         config::{SinkConfig, SinkContext},
         event::metric::MetricValue,
+        event::Event,
         sinks::influxdb::test_util::{cleanup_v1, format_timestamp, onboarding_v1, query_v1},
         tls::{self, TlsOptions},
-        Event,
     };
     use futures::stream;
     use serde_json::Value;
@@ -502,19 +503,17 @@ mod integration_tests {
             assert_eq!(metrics.len(), 1);
             let output = &metrics[0];
 
-            match metric.data.value {
+            match metric.value() {
                 MetricValue::Gauge { value } => {
-                    assert_eq!(output["value"], Value::Number((value as u32).into()))
+                    assert_eq!(output["value"], Value::Number((*value as u32).into()))
                 }
                 _ => panic!("Unhandled metric value, fix the test"),
             }
             for (tag, value) in metric.tags().unwrap() {
                 assert_eq!(output[&tag[..]], Value::String(value.to_string()));
             }
-            let timestamp = format_timestamp(
-                metric.data.timestamp.unwrap(),
-                chrono::SecondsFormat::Millis,
-            );
+            let timestamp =
+                format_timestamp(metric.timestamp().unwrap(), chrono::SecondsFormat::Millis);
             assert_eq!(output["time"], Value::String(timestamp));
         }
 

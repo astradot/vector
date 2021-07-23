@@ -98,8 +98,7 @@ mod tests {
     use super::CoercerConfig;
     use crate::{
         config::{GlobalOptions, TransformConfig},
-        event::{LogEvent, Value},
-        Event,
+        event::{Event, LogEvent, Value},
     };
     use pretty_assertions::assert_eq;
 
@@ -134,7 +133,9 @@ mod tests {
         .await
         .unwrap();
         let coercer = coercer.as_function();
-        let result = coercer.transform_one(event).unwrap().into_log();
+        let mut buf = Vec::with_capacity(1);
+        coercer.transform(&mut buf, event);
+        let result = buf.pop().unwrap().into_log();
         assert_eq!(&metadata, result.metadata());
         result
     }

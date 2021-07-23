@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     conditions::{Condition, ConditionConfig, ConditionDescription},
-    Event,
+    event::Event,
 };
 
 //------------------------------------------------------------------------------
@@ -49,7 +49,7 @@ mod test {
     use super::*;
     use crate::{
         event::metric::{Metric, MetricKind, MetricValue},
-        Event,
+        event::Event,
     };
 
     #[test]
@@ -61,14 +61,11 @@ mod test {
     fn is_log_basic() {
         let cond = IsLogConfig {}.build().unwrap();
 
-        assert_eq!(cond.check(&Event::from("just a log")), true);
-        assert_eq!(
-            cond.check(&Event::from(Metric::new(
-                "test metric",
-                MetricKind::Incremental,
-                MetricValue::Counter { value: 1.0 },
-            ))),
-            false
-        );
+        assert!(cond.check(&Event::from("just a log")));
+        assert!(!cond.check(&Event::from(Metric::new(
+            "test metric",
+            MetricKind::Incremental,
+            MetricValue::Counter { value: 1.0 },
+        ))),);
     }
 }

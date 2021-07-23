@@ -112,8 +112,7 @@ mod tests {
     use super::LogfmtConfig;
     use crate::{
         config::{GlobalOptions, TransformConfig},
-        event::{LogEvent, Value},
-        Event,
+        event::{Event, LogEvent, Value},
     };
 
     #[test]
@@ -136,7 +135,9 @@ mod tests {
         .unwrap();
         let parser = parser.as_function();
 
-        let result = parser.transform_one(event).unwrap().into_log();
+        let mut buf = Vec::with_capacity(1);
+        parser.transform(&mut buf, event);
+        let result = buf.pop().unwrap().into_log();
         assert_eq!(result.metadata(), &metadata);
         result
     }

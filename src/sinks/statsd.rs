@@ -3,14 +3,14 @@ use crate::sinks::util::unix::UnixSinkConfig;
 use crate::{
     config::{DataType, GenerateConfig, SinkConfig, SinkContext, SinkDescription},
     event::metric::{Metric, MetricKind, MetricTags, MetricValue, StatisticKind},
+    event::Event,
     internal_events::StatsdInvalidMetricReceived,
     sinks::util::{
         encode_namespace,
         tcp::TcpSinkConfig,
         udp::{UdpService, UdpSinkConfig},
-        BatchConfig, BatchSettings, BatchSink, Buffer, Compression,
+        BatchConfig, BatchSettings, BatchSink, Buffer, Compression, EncodedEvent,
     },
-    Event,
 };
 use futures::{future, stream, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use serde::{Deserialize, Serialize};
@@ -84,8 +84,9 @@ impl SinkConfig for StatsdSinkConfig {
         let default_namespace = self.default_namespace.clone();
         match &self.mode {
             Mode::Tcp(config) => {
-                let encode_event =
-                    move |event| encode_event(event, default_namespace.as_deref()).map(Into::into);
+                let encode_event = move |event| {
+                    encode_event(event, default_namespace.as_deref()).map(EncodedEvent::from)
+                };
                 config.build(cx, encode_event)
             }
             Mode::Udp(config) => {
@@ -116,8 +117,9 @@ impl SinkConfig for StatsdSinkConfig {
             }
             #[cfg(unix)]
             Mode::Unix(config) => {
-                let encode_event =
-                    move |event| encode_event(event, default_namespace.as_deref()).map(Into::into);
+                let encode_event = move |event| {
+                    encode_event(event, default_namespace.as_deref()).map(EncodedEvent::from)
+                };
                 config.build(cx, encode_event)
             }
         }
@@ -167,20 +169,20 @@ fn push_event<V: Display>(
     };
 }
 
-fn encode_event(event: Event, default_namespace: Option<&str>) -> Option<Vec<u8>> {
+fn encode_event(event: Event, default_namespace: Option<&str>) -> Option<EncodedEvent<Vec<u8>>> {
     let mut buf = Vec::new();
 
     let metric = event.as_metric();
-    match &metric.data.value {
+    match metric.value() {
         MetricValue::Counter { value } => {
-            push_event(&mut buf, &metric, value, "c", None);
+            push_event(&mut buf, metric, value, "c", None);
         }
         MetricValue::Gauge { value } => {
-            match metric.data.kind {
+            match metric.kind() {
                 MetricKind::Incremental => {
-                    push_event(&mut buf, &metric, format!("{:+}", value), "g", None)
+                    push_event(&mut buf, metric, format!("{:+}", value), "g", None)
                 }
-                MetricKind::Absolute => push_event(&mut buf, &metric, value, "g", None),
+                MetricKind::Absolute => push_event(&mut buf, metric, value, "g", None),
             };
         }
         MetricValue::Distribution { samples, statistic } => {
@@ -191,7 +193,7 @@ fn encode_event(event: Event, default_namespace: Option<&str>) -> Option<Vec<u8>
             for sample in samples {
                 push_event(
                     &mut buf,
-                    &metric,
+                    metric,
                     sample.value,
                     metric_type,
                     Some(sample.rate),
@@ -200,13 +202,13 @@ fn encode_event(event: Event, default_namespace: Option<&str>) -> Option<Vec<u8>
         }
         MetricValue::Set { values } => {
             for val in values {
-                push_event(&mut buf, &metric, val, "s", None);
+                push_event(&mut buf, metric, val, "s", None);
             }
         }
         _ => {
             emit!(StatsdInvalidMetricReceived {
-                value: &metric.data.value,
-                kind: &metric.data.kind,
+                value: metric.value(),
+                kind: &metric.kind(),
             });
 
             return None;
@@ -218,7 +220,7 @@ fn encode_event(event: Event, default_namespace: Option<&str>) -> Option<Vec<u8>
     let mut body: Vec<u8> = message.into_bytes();
     body.push(b'\n');
 
-    Some(body)
+    Some(EncodedEvent::new(body))
 }
 
 impl Service<Vec<u8>> for StatsdSvc {
@@ -300,7 +302,7 @@ mod test {
         .with_tags(Some(tags()));
         let event = Event::Metric(metric1.clone());
         let frame = &encode_event(event, None).unwrap();
-        let metric2 = parse(from_utf8(&frame).unwrap().trim()).unwrap();
+        let metric2 = parse(from_utf8(&frame.item).unwrap().trim()).unwrap();
         shared::assert_event_data_eq!(metric1, metric2);
     }
 
@@ -316,7 +318,7 @@ mod test {
         let frame = &encode_event(event, None).unwrap();
         // The statsd parser will parse the counter as Incremental,
         // so we can't compare it with the parsed value.
-        assert_eq!("counter:1.5|c\n", from_utf8(&frame).unwrap());
+        assert_eq!("counter:1.5|c\n", from_utf8(&frame.item).unwrap());
     }
 
     #[cfg(feature = "sources-statsd")]
@@ -330,7 +332,7 @@ mod test {
         .with_tags(Some(tags()));
         let event = Event::Metric(metric1.clone());
         let frame = &encode_event(event, None).unwrap();
-        let metric2 = parse(from_utf8(&frame).unwrap().trim()).unwrap();
+        let metric2 = parse(from_utf8(&frame.item).unwrap().trim()).unwrap();
         shared::assert_event_data_eq!(metric1, metric2);
     }
 
@@ -345,7 +347,7 @@ mod test {
         .with_tags(Some(tags()));
         let event = Event::Metric(metric1.clone());
         let frame = &encode_event(event, None).unwrap();
-        let metric2 = parse(from_utf8(&frame).unwrap().trim()).unwrap();
+        let metric2 = parse(from_utf8(&frame.item).unwrap().trim()).unwrap();
         shared::assert_event_data_eq!(metric1, metric2);
     }
 
@@ -356,14 +358,14 @@ mod test {
             "distribution",
             MetricKind::Incremental,
             MetricValue::Distribution {
-                samples: crate::samples![1.5 => 1],
+                samples: vector_core::samples![1.5 => 1],
                 statistic: StatisticKind::Histogram,
             },
         )
         .with_tags(Some(tags()));
         let event = Event::Metric(metric1.clone());
         let frame = &encode_event(event, None).unwrap();
-        let metric2 = parse(from_utf8(&frame).unwrap().trim()).unwrap();
+        let metric2 = parse(from_utf8(&frame.item).unwrap().trim()).unwrap();
         shared::assert_event_data_eq!(metric1, metric2);
     }
 
@@ -380,7 +382,7 @@ mod test {
         .with_tags(Some(tags()));
         let event = Event::Metric(metric1.clone());
         let frame = &encode_event(event, None).unwrap();
-        let metric2 = parse(from_utf8(&frame).unwrap().trim()).unwrap();
+        let metric2 = parse(from_utf8(&frame.item).unwrap().trim()).unwrap();
         shared::assert_event_data_eq!(metric1, metric2);
     }
 
@@ -420,7 +422,7 @@ mod test {
                     "histogram",
                     MetricKind::Incremental,
                     MetricValue::Distribution {
-                        samples: crate::samples![2.0 => 100],
+                        samples: vector_core::samples![2.0 => 100],
                         statistic: StatisticKind::Histogram,
                     },
                 )

@@ -5,7 +5,7 @@
 //!
 //! **Note:** This code is experimental.
 
-use crate::{internal_events, Event, Result};
+use crate::{event::Event, internal_events, Result};
 use lucet_runtime::{DlModule, InstanceHandle, Limits, MmapRegion, Region};
 use lucet_wasi::WasiCtxBuilder;
 use lucetc::{Bindings, Lucetc, LucetcOpts};
@@ -120,7 +120,7 @@ impl WasmModule {
             .remove_embed_ctx::<Option<Registration>>()
             .and_then(|v| v);
 
-        if let None = registration {
+        if registration.is_none() {
             error!("Not registered! Please fill your `init` call with a `Registration::transform().register()`.");
         }
 

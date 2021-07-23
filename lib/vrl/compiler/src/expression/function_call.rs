@@ -205,16 +205,18 @@ impl FunctionCall {
 impl Expression for FunctionCall {
     fn resolve(&self, ctx: &mut Context) -> Resolved {
         span!(Level::ERROR, "remap", vrl_position = &self.span.start()).in_scope(|| {
-            self.expr.resolve(ctx).map_err(|err| {
-                use ExpressionError::*;
+            self.expr.resolve(ctx).map_err(|err| match err {
+                ExpressionError::Abort { .. } => {
+                    panic!("abort errors must only be defined by `abort` statement")
+                }
+                ExpressionError::Error {
+                    message,
+                    mut labels,
+                    notes,
+                } => {
+                    labels.push(Label::primary(message.clone(), self.span));
 
-                match err {
-                    Abort => panic!("abort errors must only be defined by `abort` statement"),
-                    Error {
-                        message,
-                        labels,
-                        notes,
-                    } => ExpressionError::Error {
+                    ExpressionError::Error {
                         message: format!(
                             r#"function call error for "{}" at ({}:{}): {}"#,
                             self.ident,
@@ -224,7 +226,7 @@ impl Expression for FunctionCall {
                         ),
                         labels,
                         notes,
-                    },
+                    }
                 }
             })
         })
@@ -374,7 +376,7 @@ pub enum Error {
         position: usize,
     },
 
-    #[error("function compilation error")]
+    #[error("function compilation error: error[E{}] {}", error.code(), error)]
     Compilation {
         call_span: Span,
         error: Box<dyn DiagnosticError>,
@@ -635,6 +637,9 @@ impl DiagnosticError for Error {
 
                 notes
             }
+
+            Compilation { error, .. } => error.notes(),
+
             _ => vec![],
         }
     }

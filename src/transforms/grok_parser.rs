@@ -151,9 +151,7 @@ mod tests {
     use super::GrokParserConfig;
     use crate::{
         config::{log_schema, GlobalOptions, TransformConfig},
-        event,
-        event::LogEvent,
-        Event,
+        event::{self, Event, LogEvent},
     };
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -184,7 +182,9 @@ mod tests {
         .unwrap();
         let parser = parser.as_function();
 
-        let result = parser.transform_one(event).unwrap().into_log();
+        let mut buf = Vec::with_capacity(1);
+        parser.transform(&mut buf, event);
+        let result = buf.pop().unwrap().into_log();
         assert_eq!(result.metadata(), &metadata);
         result
     }

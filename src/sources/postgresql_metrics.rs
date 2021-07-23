@@ -1,8 +1,8 @@
 use crate::{
     config::{DataType, SourceConfig, SourceContext, SourceDescription},
     event::metric::{Metric, MetricKind, MetricValue},
+    event::Event,
     internal_events::{PostgresqlMetricsCollectCompleted, PostgresqlMetricsCollectFailed},
-    Event,
 };
 use chrono::{DateTime, Utc};
 use futures::{
@@ -927,9 +927,8 @@ mod integration_tests {
                 .map(|e| e.as_metric())
                 .find(|e| e.name() == "up")
                 .unwrap()
-                .data
-                .value,
-            gauge!(1)
+                .value(),
+            &gauge!(1)
         );
 
         // test namespace and tags

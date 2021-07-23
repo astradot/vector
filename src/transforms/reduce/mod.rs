@@ -102,7 +102,7 @@ impl ReduceState {
 
     fn add_event(&mut self, e: LogEvent, strategies: &IndexMap<String, MergeStrategy>) {
         let (fields, metadata) = e.into_parts();
-        self.metadata.merge(&metadata);
+        self.metadata.merge(metadata);
 
         for (k, v) in fields.into_iter() {
             let strategy = strategies.get(&k);
@@ -155,7 +155,7 @@ pub struct Reduce {
 }
 
 impl Reduce {
-    fn new(config: &ReduceConfig) -> crate::Result<Self> {
+    pub fn new(config: &ReduceConfig) -> crate::Result<Self> {
         if config.ends_when.is_some() && config.starts_when.is_some() {
             return Err("only one of `ends_when` and `starts_when` can be provided".into());
         }

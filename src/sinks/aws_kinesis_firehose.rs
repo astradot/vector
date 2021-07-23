@@ -5,8 +5,9 @@ use crate::{
     sinks::util::{
         encoding::{EncodingConfig, EncodingConfiguration},
         retries::RetryLogic,
-        sink::Response,
-        BatchConfig, BatchSettings, Compression, EncodedLength, TowerRequestConfig, VecBuffer,
+        sink::{self, Response},
+        BatchConfig, BatchSettings, Compression, EncodedEvent, EncodedLength, TowerRequestConfig,
+        VecBuffer,
     },
 };
 use bytes::Bytes;
@@ -160,6 +161,7 @@ impl KinesisFirehoseService {
                 VecBuffer::new(batch.size),
                 batch.timeout,
                 cx.acker(),
+                sink::StdServiceLogic::default(),
             )
             .sink_map_err(|error| error!(message = "Fatal kinesis firehose sink error.", %error))
             .with_flat_map(move |e| stream::iter(Some(encode_event(e, &encoding))).map(Ok));
@@ -240,7 +242,7 @@ enum HealthcheckError {
     StreamNamesMismatch { name: String, stream_name: String },
 }
 
-fn encode_event(mut event: Event, encoding: &EncodingConfig<Encoding>) -> Record {
+fn encode_event(mut event: Event, encoding: &EncodingConfig<Encoding>) -> EncodedEvent<Record> {
     encoding.apply_rules(&mut event);
     let log = event.into_log();
     let data = match encoding.codec() {
@@ -254,7 +256,7 @@ fn encode_event(mut event: Event, encoding: &EncodingConfig<Encoding>) -> Record
 
     let data = Bytes::from(data);
 
-    Record { data }
+    EncodedEvent::new(Record { data })
 }
 
 #[cfg(test)]
@@ -272,7 +274,7 @@ mod tests {
         let message = "hello world".to_string();
         let event = encode_event(message.clone().into(), &Encoding::Text.into());
 
-        assert_eq!(&event.data[..], message.as_bytes());
+        assert_eq!(&event.item.data[..], message.as_bytes());
     }
 
     #[test]
@@ -282,7 +284,7 @@ mod tests {
         event.as_mut_log().insert("key", "value");
         let event = encode_event(event, &Encoding::Json.into());
 
-        let map: BTreeMap<String, String> = serde_json::from_slice(&event.data[..]).unwrap();
+        let map: BTreeMap<String, String> = serde_json::from_slice(&event.item.data[..]).unwrap();
 
         assert_eq!(
             map[&crate::config::log_schema().message_key().to_string()],
@@ -344,7 +346,7 @@ mod integration_tests {
         let client = config.create_client().unwrap();
         let mut sink = KinesisFirehoseService::new(config, client, cx).unwrap();
 
-        let (input, events) = random_events_with_stream(100, 100);
+        let (input, events) = random_events_with_stream(100, 100, None);
         let mut events = events.map(Ok);
 
         let _ = sink.send_all(&mut events).await.unwrap();

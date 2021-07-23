@@ -7,13 +7,13 @@ use crate::{
     buffers,
     config::{DataType, SinkContext, SourceContext},
     event::Event,
-    internal_events::{EventIn, EventOut, EventProcessed, EventZeroIn},
+    internal_events::{EventIn, EventOut, EventZeroIn},
     shutdown::SourceShutdownCoordinator,
-    stream::VecStreamExt,
     transforms::Transform,
     Pipeline,
 };
 use futures::{future, stream, FutureExt, SinkExt, StreamExt, TryFutureExt};
+use std::pin::Pin;
 use std::{
     collections::HashMap,
     future::ready,
@@ -23,7 +23,7 @@ use stream_cancel::{StreamExt as StreamCancelExt, Trigger, Tripwire};
 use tokio::time::{timeout, Duration};
 
 pub struct Pieces {
-    pub inputs: HashMap<String, (buffers::BufferInputCloner, Vec<String>)>,
+    pub inputs: HashMap<String, (buffers::BufferInputCloner<Event>, Vec<String>)>,
     pub outputs: HashMap<String, fanout::ControlChannel>,
     pub tasks: HashMap<String, Task>,
     pub source_tasks: HashMap<String, Task>,
@@ -52,12 +52,12 @@ pub async fn build_pieces(
     for (name, source) in config
         .sources
         .iter()
-        .filter(|(name, _)| diff.sources.contains_new(&name))
+        .filter(|(name, _)| diff.sources.contains_new(name))
     {
         let (tx, rx) = futures::channel::mpsc::channel(1000);
         let pipeline = Pipeline::from_sender(tx, vec![]);
 
-        let typetag = source.source_type();
+        let typetag = source.inner.source_type();
 
         let (shutdown_signal, force_shutdown_tripwire) = shutdown_coordinator.register_source(name);
 
@@ -66,8 +66,9 @@ pub async fn build_pieces(
             globals: config.global.clone(),
             shutdown: shutdown_signal,
             out: pipeline,
+            acknowledgements: source.acknowledgements,
         };
-        let server = match source.build(context).await {
+        let server = match source.inner.build(context).await {
             Err(error) => {
                 errors.push(format!("Source \"{}\": {}", name, error));
                 continue;
@@ -105,7 +106,7 @@ pub async fn build_pieces(
     for (name, transform) in config
         .transforms
         .iter()
-        .filter(|(name, _)| diff.transforms.contains_new(&name))
+        .filter(|(name, _)| diff.transforms.contains_new(name))
     {
         let trans_inputs = &transform.inputs;
 
@@ -120,9 +121,13 @@ pub async fn build_pieces(
             Ok(transform) => transform,
         };
 
-        let (input_tx, input_rx) = futures::channel::mpsc::channel(100);
-        let input_tx = buffers::BufferInputCloner::Memory(input_tx, buffers::WhenFull::Block);
-        let input_rx = crate::utilization::wrap(input_rx);
+        let (input_tx, input_rx, _) =
+            vector_core::buffers::build(vector_core::buffers::Variant::Memory {
+                max_events: 100,
+                when_full: vector_core::buffers::WhenFull::Block,
+            })
+            .unwrap();
+        let input_rx = crate::utilization::wrap(Pin::new(input_rx));
 
         let (output, control) = Fanout::new();
 
@@ -134,7 +139,6 @@ pub async fn build_pieces(
                     let mut buf = Vec::with_capacity(1);
                     t.transform(&mut buf, v);
                     emit!(EventOut { count: buf.len() });
-                    emit!(EventProcessed);
                     stream::iter(buf.into_iter()).map(Ok)
                 })
                 .forward(output)
@@ -142,8 +146,7 @@ pub async fn build_pieces(
             Transform::Task(t) => {
                 let filtered = input_rx
                     .filter(move |event| ready(filter_event_type(event, input_type)))
-                    .inspect(|_| emit!(EventIn))
-                    .on_processed(|| emit!(EventProcessed));
+                    .inspect(|_| emit!(EventIn));
                 t.transform(Box::pin(filtered))
                     .map(Ok)
                     .forward(output.with(|event| async {
@@ -168,7 +171,7 @@ pub async fn build_pieces(
     for (name, sink) in config
         .sinks
         .iter()
-        .filter(|(name, _)| diff.sinks.contains_new(&name))
+        .filter(|(name, _)| diff.sinks.contains_new(name))
     {
         let sink_inputs = &sink.inputs;
         let healthcheck = sink.healthcheck();
@@ -180,7 +183,7 @@ pub async fn build_pieces(
         let (tx, rx, acker) = if let Some(buffer) = buffers.remove(name) {
             buffer
         } else {
-            let buffer = sink.buffer.build(&config.global.data_dir, &name);
+            let buffer = sink.buffer.build(&config.global.data_dir, name);
             match buffer {
                 Err(error) => {
                     errors.push(format!("Sink \"{}\": {}", name, error));

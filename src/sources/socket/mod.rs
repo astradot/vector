@@ -83,7 +83,7 @@ impl SourceConfig for SocketConfig {
                 let tcp = tcp::RawTcpSource {
                     config: config.clone(),
                 };
-                let tls = MaybeTlsSettings::from_config(&config.tls(), true)?;
+                let tls = MaybeTlsSettings::from_config(config.tls(), true)?;
                 tcp.run(
                     config.address(),
                     config.keepalive(),
@@ -162,13 +162,14 @@ mod test {
     use super::{tcp::TcpConfig, udp::UdpConfig, SocketConfig};
     use crate::{
         config::{log_schema, GlobalOptions, SinkContext, SourceConfig, SourceContext},
+        event::Event,
         shutdown::{ShutdownSignal, SourceShutdownCoordinator},
-        sinks::util::tcp::TcpSinkConfig,
+        sinks::util::{tcp::TcpSinkConfig, EncodedEvent},
         test_util::{
             collect_n, next_addr, random_string, send_lines, send_lines_tls, wait_for_tcp,
         },
         tls::{self, TlsConfig, TlsOptions},
-        Event, Pipeline,
+        Pipeline,
     };
     use bytes::Bytes;
     use futures::{stream, StreamExt};
@@ -394,7 +395,7 @@ mod test {
         let deadline = Instant::now() + Duration::from_secs(10);
         let shutdown_complete = shutdown.shutdown_source(source_name, deadline);
         let shutdown_success = shutdown_complete.await;
-        assert_eq!(true, shutdown_success);
+        assert!(shutdown_success);
 
         // Ensure source actually shut down successfully.
         let _ = source_handle.await.unwrap();
@@ -428,7 +429,7 @@ mod test {
         let message_bytes = Bytes::from(message.clone() + "\n");
 
         let cx = SinkContext::new_test();
-        let encode_event = move |_event| Some(message_bytes.clone());
+        let encode_event = move |_event| Some(EncodedEvent::new(message_bytes.clone()));
         let sink_config = TcpSinkConfig::from_address(format!("localhost:{}", addr.port()));
         let (sink, _healthcheck) = sink_config.build(cx, encode_event).unwrap();
 
@@ -453,7 +454,7 @@ mod test {
         let deadline = Instant::now() + Duration::from_secs(10);
         let shutdown_complete = shutdown.shutdown_source(source_name, deadline);
         let shutdown_success = shutdown_complete.await;
-        assert_eq!(true, shutdown_success);
+        assert!(shutdown_success);
 
         // Ensure that the source has actually shut down.
         let _ = source_handle.await.unwrap();
@@ -514,6 +515,7 @@ mod test {
                 globals: GlobalOptions::default(),
                 shutdown: shutdown_signal,
                 out: sender,
+                acknowledgements: false,
             })
             .await
             .unwrap();
@@ -623,7 +625,7 @@ mod test {
         let deadline = Instant::now() + Duration::from_secs(10);
         let shutdown_complete = shutdown.shutdown_source(source_name, deadline);
         let shutdown_success = shutdown_complete.await;
-        assert_eq!(true, shutdown_success);
+        assert!(shutdown_success);
 
         // Ensure source actually shut down successfully.
         let _ = source_handle.await.unwrap();
@@ -658,7 +660,7 @@ mod test {
         let deadline = Instant::now() + Duration::from_secs(10);
         let shutdown_complete = shutdown.shutdown_source(source_name, deadline);
         let shutdown_success = shutdown_complete.await;
-        assert_eq!(true, shutdown_success);
+        assert!(shutdown_success);
 
         // Ensure that the source has actually shut down.
         let _ = source_handle.await.unwrap();

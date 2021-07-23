@@ -1,11 +1,12 @@
 use crate::{
     config::{DataType, GlobalOptions, TransformConfig, TransformDescription},
-    event::Event,
+    event::{Event, VrlTarget},
     internal_events::{RemapMappingAbort, RemapMappingError},
     transforms::{FunctionTransform, Transform},
     Result,
 };
 use serde::{Deserialize, Serialize};
+use shared::TimeZone;
 use vrl::diagnostic::Formatter;
 use vrl::{Program, Runtime, Terminate};
 
@@ -14,6 +15,8 @@ use vrl::{Program, Runtime, Terminate};
 #[derivative(Default)]
 pub struct RemapConfig {
     pub source: String,
+    #[serde(default)]
+    pub timezone: TimeZone,
     pub drop_on_error: bool,
     #[serde(default = "crate::serde::default_true")]
     pub drop_on_abort: bool,
@@ -48,6 +51,7 @@ impl TransformConfig for RemapConfig {
 #[derive(Debug, Clone)]
 pub struct Remap {
     program: Program,
+    timezone: TimeZone,
     drop_on_error: bool,
     drop_on_abort: bool,
 }
@@ -62,6 +66,7 @@ impl Remap {
 
         Ok(Remap {
             program,
+            timezone: config.timezone,
             drop_on_error: config.drop_on_error,
             drop_on_abort: config.drop_on_abort,
         })
@@ -69,7 +74,7 @@ impl Remap {
 }
 
 impl FunctionTransform for Remap {
-    fn transform(&mut self, output: &mut Vec<Event>, mut event: Event) {
+    fn transform(&mut self, output: &mut Vec<Event>, event: Event) {
         // If a program can fail or abort at runtime, we need to clone the
         // original event and keep it around, to allow us to discard any
         // mutations made to the event while the VRL program runs, before it
@@ -87,32 +92,35 @@ impl FunctionTransform for Remap {
             None
         };
 
+        let mut target: VrlTarget = event.into();
+
         let mut runtime = Runtime::default();
 
-        let result = match event {
-            Event::Log(ref mut event) => runtime.resolve(event, &self.program),
-            Event::Metric(ref mut event) => runtime.resolve(event, &self.program),
-        };
+        let result = runtime.resolve(&mut target, &self.program, &self.timezone);
 
         match result {
-            Ok(_) => output.push(event),
-            Err(Terminate::Abort) => {
+            Ok(_) => {
+                for event in target.into_events() {
+                    output.push(event)
+                }
+            }
+            Err(Terminate::Abort(_)) => {
                 emit!(RemapMappingAbort {
                     event_dropped: self.drop_on_abort,
                 });
 
                 if !self.drop_on_abort {
-                    output.push(original_event.unwrap_or(event))
+                    output.push(original_event.expect("event will be set"))
                 }
             }
             Err(Terminate::Error(error)) => {
                 emit!(RemapMappingError {
-                    error,
+                    error: error.to_string(),
                     event_dropped: self.drop_on_error,
                 });
 
                 if !self.drop_on_error {
-                    output.push(original_event.unwrap_or(event))
+                    output.push(original_event.expect("event will be set"))
                 }
             }
         }
@@ -122,11 +130,15 @@ impl FunctionTransform for Remap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{
-        metric::{MetricKind, MetricValue},
-        LogEvent, Metric, Value,
+    use crate::{
+        event::{
+            metric::{MetricKind, MetricValue},
+            LogEvent, Metric, Value,
+        },
+        transforms::test::transform_one,
     };
-    use indoc::formatdoc;
+    use indoc::{formatdoc, indoc};
+    use shared::btreemap;
     use std::collections::BTreeMap;
 
     #[test]
@@ -153,18 +165,51 @@ mod tests {
   .copy = .copy_from
 "#
             .to_string(),
+            timezone: TimeZone::default(),
             drop_on_error: true,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        let result = tform.transform_one(event).unwrap();
+        let result = transform_one(&mut tform, event).unwrap();
         assert_eq!(get_field_string(&result, "message"), "augment me");
         assert_eq!(get_field_string(&result, "copy_from"), "buz");
         assert_eq!(get_field_string(&result, "foo"), "bar");
         assert_eq!(get_field_string(&result, "bar"), "baz");
         assert_eq!(get_field_string(&result, "copy"), "buz");
         assert_eq!(result.metadata(), &metadata);
+    }
+
+    #[test]
+    fn check_remap_emits_multiple() {
+        let event = {
+            let mut event = LogEvent::from("augment me");
+            event.insert(
+                "events",
+                vec![btreemap!("message" => "foo"), btreemap!("message" => "bar")],
+            );
+            Event::from(event)
+        };
+        let metadata = event.metadata().clone();
+
+        let conf = RemapConfig {
+            source: indoc! {r#"
+                . = .events
+            "#}
+            .to_owned(),
+            timezone: TimeZone::default(),
+            drop_on_error: true,
+            drop_on_abort: false,
+        };
+        let mut tform = Remap::new(conf).unwrap();
+
+        let mut result = vec![];
+        tform.transform(&mut result, event);
+
+        assert_eq!(get_field_string(&result[0], "message"), "foo");
+        assert_eq!(get_field_string(&result[1], "message"), "bar");
+        assert_eq!(result[0].metadata(), &metadata);
+        assert_eq!(result[1].metadata(), &metadata);
     }
 
     #[test]
@@ -181,12 +226,13 @@ mod tests {
                 .not_an_int = int!(.bar)
                 .baz = 12
             "#},
+            timezone: TimeZone::default(),
             drop_on_error: false,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        let event = tform.transform_one(event).unwrap();
+        let event = transform_one(&mut tform, event).unwrap();
 
         assert_eq!(event.as_log().get("bar"), Some(&Value::from("is a string")));
         assert!(event.as_log().get("foo").is_none());
@@ -207,12 +253,13 @@ mod tests {
                 .not_an_int = int!(.bar)
                 .baz = 12
             "#},
+            timezone: TimeZone::default(),
             drop_on_error: true,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        assert!(tform.transform_one(event).is_none())
+        assert!(transform_one(&mut tform, event).is_none())
     }
 
     #[test]
@@ -228,12 +275,13 @@ mod tests {
                 .foo = "foo"
                 .baz = 12
             "#},
+            timezone: TimeZone::default(),
             drop_on_error: false,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        let event = tform.transform_one(event).unwrap();
+        let event = transform_one(&mut tform, event).unwrap();
 
         assert_eq!(event.as_log().get("foo"), Some(&Value::from("foo")));
         assert_eq!(event.as_log().get("bar"), Some(&Value::from("is a string")));
@@ -254,12 +302,13 @@ mod tests {
                 abort
                 .baz = 12
             "#},
+            timezone: TimeZone::default(),
             drop_on_error: false,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        let event = tform.transform_one(event).unwrap();
+        let event = transform_one(&mut tform, event).unwrap();
 
         assert_eq!(event.as_log().get("bar"), Some(&Value::from("is a string")));
         assert!(event.as_log().get("foo").is_none());
@@ -280,12 +329,13 @@ mod tests {
                 abort
                 .baz = 12
             "#},
+            timezone: TimeZone::default(),
             drop_on_error: false,
             drop_on_abort: true,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        assert!(tform.transform_one(event).is_none())
+        assert!(transform_one(&mut tform, event).is_none())
     }
 
     #[test]
@@ -303,12 +353,13 @@ mod tests {
                        .namespace = "zerk"
                        .kind = "incremental""#
                 .to_string(),
+            timezone: TimeZone::default(),
             drop_on_error: true,
             drop_on_abort: false,
         };
         let mut tform = Remap::new(conf).unwrap();
 
-        let result = tform.transform_one(metric).unwrap();
+        let result = transform_one(&mut tform, metric).unwrap();
         assert_eq!(
             result,
             Event::Metric(

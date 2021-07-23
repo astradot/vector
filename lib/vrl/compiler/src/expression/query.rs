@@ -1,25 +1,30 @@
 use crate::expression::{Container, FunctionCall, Resolved, Variable};
 use crate::parser::ast::Ident;
-use crate::{Context, Expression, Path, State, TypeDef, Value};
+use crate::{Context, Expression, State, TypeDef, Value};
+use lookup::LookupBuf;
 use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Clone, PartialEq)]
 pub struct Query {
     target: Target,
-    path: Path,
+    path: LookupBuf,
 }
 
 impl Query {
     // TODO:
     // - error when trying to index into object
     // - error when trying to path into array
-    pub fn new(target: Target, path: Path) -> Self {
+    pub fn new(target: Target, path: LookupBuf) -> Self {
         Query { target, path }
     }
 
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &LookupBuf {
         &self.path
+    }
+
+    pub fn target(&self) -> &Target {
+        &self.target
     }
 
     pub fn is_external(&self) -> bool {
@@ -119,7 +124,7 @@ impl fmt::Display for Target {
 
         match self {
             Internal(v) => v.fmt(f),
-            External => Ok(()),
+            External => write!(f, "."),
             FunctionCall(v) => v.fmt(f),
             Container(v) => v.fmt(f),
         }

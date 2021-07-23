@@ -20,7 +20,6 @@ impl<'a> InternalEvent for DockerLogsEventReceived<'a> {
     }
 
     fn emit_metrics(&self) {
-        counter!("processed_events_total", 1);
         counter!(
             "events_in_total", 1,
             "container_name" => self.container_name.to_owned()
@@ -160,12 +159,12 @@ pub struct DockerLogsLoggingDriverUnsupported<'a> {
 impl<'a> InternalEvent for DockerLogsLoggingDriverUnsupported<'a> {
     fn emit_logs(&self) {
         error!(
-            message = r#"Docker engine is not using either the `jsonfile` or `journald`
+            message = r#"
+                Docker engine is not using either the `jsonfile` or `journald`
                 logging driver. Please enable one of these logging drivers
                 to get logs from the Docker daemon."#,
             error = ?self.error,
             container_id = ?self.container_id,
-            internal_log_rate_secs = 10
         );
     }
 

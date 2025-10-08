@@ -2308,6 +2308,7 @@ dependencies = [
  "indoc",
  "influxdb-line-protocol",
  "memchr",
+ "opentelemetry-proto",
  "ordered-float 4.6.0",
  "prost 0.12.6",
  "prost-reflect",
@@ -8061,7 +8062,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "once_cell",
@@ -8107,7 +8108,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "proc-macro2 1.0.101",
  "quote 1.0.40",
  "syn 2.0.106",
@@ -12069,7 +12070,6 @@ dependencies = [
  "colored",
  "console-subscriber",
  "criterion",
- "crossterm 0.29.0",
  "csv",
  "databend-client",
  "deadpool",
@@ -12133,8 +12133,6 @@ dependencies = [
  "nkeys",
  "nom 8.0.0",
  "notify",
- "num-format",
- "number_prefix",
  "opendal",
  "openssl",
  "openssl-probe",
@@ -12156,7 +12154,6 @@ dependencies = [
  "quickcheck",
  "rand 0.9.2",
  "rand_distr",
- "ratatui",
  "rdkafka",
  "redis",
  "regex",
@@ -12461,6 +12458,7 @@ dependencies = [
  "vector-lookup",
  "vector-stream",
  "vector-tap",
+ "vector-top",
  "vrl",
 ]
 
@@ -12515,6 +12513,29 @@ dependencies = [
  "vector-buffers",
  "vector-common",
  "vector-core",
+]
+
+[[package]]
+name = "vector-top"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crossterm 0.29.0",
+ "exitcode",
+ "futures 0.3.31",
+ "futures-util",
+ "glob",
+ "humantime",
+ "indoc",
+ "num-format",
+ "number_prefix",
+ "ratatui",
+ "tokio",
+ "tokio-stream",
+ "url",
+ "vector-api-client",
+ "vector-common",
 ]
 
 [[package]]
